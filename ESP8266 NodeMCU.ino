@@ -19,12 +19,13 @@
 Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
 
 Adafruit_MLX90614 mlx = Adafruit_MLX90614();  //for infrared thermometer
-int temp;  // Create a variable to have something dynamic to show on the 
+int temp;  // Create a variable to have something dynamic to show on the display
 
+int day = 0;
 int FACE_ID = -1;
 int absent[4] = {0};
 int NoStudent = 4;
-String student, suhu, remark, NoPhone, notify;
+String student, temperature, remark, NoPhone, notify;
 String weekDays[7]={"Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"};
 String months[12]={"January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"};
 
@@ -40,7 +41,7 @@ const char* resourceB = "/trigger/Kelas B/with/key/j_K4PvfcImzr1ygbaKF4oHT8XNQnH
 const char *serverC = "maker.ifttt.com";
 const char* resourceC = "/trigger/Absent & Fever/with/key/j_K4PvfcImzr1ygbaKF4oHT8XNQnHDOk5URFx9EUDE3";
 
-const char *host = "http://localhost/";
+const char *host = "http://192.168.0.100/";
 
 typedef struct message {
    int faceid;
@@ -49,7 +50,8 @@ message myMessage;
 
 void onDataReceiver(uint8_t * mac, uint8_t *incomingData, uint8_t len) {
    Serial.println("Message received.");
-   memcpy(&myMessage, incomingData, sizeof(myMessage));
+   memcpy(&myMessage, incomingData, sizeof(myMessage));Serial.print("Face ID Detected:");
+   Serial.println(myMessage.faceid);
    FACE_ID = myMessage.faceid;
 }
 
@@ -59,6 +61,7 @@ NTPClient timeClient(ntpUDP, "pool.ntp.org");
 void setup() {
   Serial.begin(115200);
   Serial.println();
+  pinMode(D0,INPUT);
   
   WiFi.begin(ssid, password);
   
@@ -79,6 +82,12 @@ void setup() {
   }
   esp_now_register_recv_cb(onDataReceiver);
 
+  timeClient.begin();
+  timeClient.setTimeOffset(28800);
+
+  Serial.print("Current Face Id:");
+  Serial.println(FACE_ID);
+
   Serial.println("Adafruit MLX90614 test");               
   delay(1000);  // This delay is needed to let the display to initialize
   display.begin(SSD1306_SWITCHCAPVCC, 0x3C);  // Initialize display with the I2C address of 0x3C
@@ -90,13 +99,9 @@ void setup() {
   };
   Serial.print("Emissivity = "); Serial.println(mlx.readEmissivity());
   Serial.println("================================================");
-
-  timeClient.begin();
-  timeClient.setTimeOffset(28800);
 }
 
 void loop() {
-  int h = digitalRead(D0);
   timeClient.update(); 
 
   unsigned long epochTime = timeClient.getEpochTime();
@@ -130,55 +135,62 @@ void loop() {
   Serial.print("Current Face Id:");
   Serial.println(FACE_ID);
 
-  if((currentHour == 7 && currentMinute <= 15) || (currentHour >=5 && currentHour <=6)){
+  if((currentHour == 7 && currentMinute <= 15) || (currentHour == 22 && currentMinute <= 45)){ //normal
     data = 1;
 
+    int h = digitalRead(D0);
     if (h==1){
-      if (FACE_ID >= 0 && FACE_ID <=1){
-        student = getdata(data);
-        Serial.print("Student name is:");
-        Serial.println(student);
-        Serial.println(remark);
-        absent[FACE_ID] = 1;
-        
-        makeIFTTTRequestA();
-        delay(10000);
-      }  
-    
-      if (FACE_ID >=2 && FACE_ID<=3){
-        student = getdata(data);
-        Serial.print("Student name is:");
-        Serial.println(student);
-        Serial.println(remark);
-        absent[FACE_ID] = 1;
-        
-        makeIFTTTRequestB();
-        delay(10000);
-      }
+     readtemp();
+     student = getdata(data);
+     Serial.print("Student name is:");
+     Serial.println(student);
+     
+     if(temp > 37){
+      remark = "Temperature high";
+      data = 2;
+      notify = String(weekDay + ", " + currentDate + ". Your child with name " + student + " maybe not feeling well because his/her body temperature exceed the normal limit.");
+      NoPhone = getdata(data);
+      makeIFTTTRequestC();
+     }
+     absent[FACE_ID] = 1;
+    if (FACE_ID >= 0 && FACE_ID <=1){
+      makeIFTTTRequestA();
+      delay(1000);
+    }  
+    if (FACE_ID >=2 && FACE_ID<=3){ 
+      makeIFTTTRequestB();
+      delay(1000);
     }
-  } 
+  }
+  remark = " ";
+ }
   
-  if((currentHour == 7 && currentMinute > 15) || currentHour >=9){
-    for(int j = 0; j < NoStudent; j++) {
-      Serial.print("J value:");
-      Serial.println(j);
+  if((currentHour == 7 && currentMinute > 15) || currentHour == 22 && currentMinute > 45){
+    for(FACE_ID = 0; FACE_ID < NoStudent; FACE_ID++) {
+      Serial.print("Face ID:");
+      Serial.println(FACE_ID);
       Serial.print("Absent Contain:");
-      Serial.println(absent[j]);
-      if(absent[j] == 0){
+      Serial.println(absent[FACE_ID]);
+      if(absent[FACE_ID] == 0){
         data = 1;
         student = getdata(data);
+        Serial.print("Student Name:");
+        Serial.println(student);
         data = 2;
         NoPhone = getdata(data);
-        remark = String( "Your child with name " + student + " is not attending school on " + weekDay + "," + currentDate);
-        absent[j] = 1;
+        Serial.print("Phone Number:");
+        Serial.println(NoPhone);
+        notify = String("Your child with name " + student + " is not attending school on " + weekDay + ", " + currentDate);
         makeIFTTTRequestC();
         delay(5000);
       }
-    }   
+      absent[FACE_ID] = 1;
+    }
+      if (timeClient.getDay() != day){
+      absent[4] = {0};
+      day = timeClient.getDay();
+    }
   }
-  
-  FACE_ID = -1;
-  delay(5000);
 }
 
 String getdata(int data){
@@ -213,65 +225,6 @@ String getdata(int data){
   return payloadGet;
 }
 
-void temperature(){
-  
-  Serial.print("Ambient = "); Serial.print(mlx.readAmbientTempC());
-  Serial.print("*C\tObject = "); Serial.print(mlx.readObjectTempC()); Serial.println("*C");
-  Serial.println();
-  //delay(1000);
-
-  temp++;  // Increase value for testing
-  if(temp > 43)  // If temp is greater than 150
-  {
-    temp = 0;  // Set temp to 0
-  }
-  
-  temp = mlx.readObjectTempC(); //comment this line if you want to test
-
-  display.clearDisplay();  // Clear the display so we can refresh
-
-  // Print text:
-  display.setFont();
-  display.setCursor(45,5);  // (x,y)
-  display.println("TEMPERATURE");  // Text or value to print
-
-  // Print temperature
-  char string[10];  // Create a character array of 10 characters
-  // Convert float to a string:
-  dtostrf(temp, 4, 0, string);  // (variable, no. of digits we are going to use, no. of decimal digits, string name)
-  
-  display.setFont(&FreeMonoBold9pt7b);  // Set a custom font
-  display.setCursor(22,25);  // (x,y)
-  display.println(string);  // Text or value to print
-  display.setCursor(90,25);  // (x,y)
-  display.println("C");  // Text or value to print
-  display.setFont(); 
-  display.setCursor(78,15);  // (x,y)
-  display.cp437(true);
-  display.write(167);
-  
-  // Draw a filled circle:
-    display.fillCircle(18, 27, 5, WHITE); // Draw filled circle (x,y,radius,color). X and Y are the coordinates for the center point
-    
-  // Draw rounded rectangle:
-   display.drawRoundRect(16, 3, 5, 24, 2, WHITE); // Draw rounded rectangle (x,y,width,height,radius,color)
-   
-   // It draws from the location to down-right
-    // Draw ruler step
-
-   for (int i = 3; i<=18; i=i+2){
-    display.drawLine(21, i, 22, i, WHITE);  // Draw line (x0,y0,x1,y1,color)
-  }
-  
-  //Draw temperature
-  temp = temp*0.43; //ratio for show
-  display.drawLine(18, 23, 18, 23-temp, WHITE);  // Draw line (x0,y0,x1,y1,color)
-  
-  display.display(); 
-  delay(500);
-}// Print everything we set previously
-
-
 void makeIFTTTRequestA() {
   Serial.print("Connecting to "); 
   Serial.print(serverA);
@@ -289,8 +242,8 @@ void makeIFTTTRequestA() {
    
   Serial.print("Request resource: "); 
   Serial.println(resourceA);
-
-  String jsonObject = "{\"value1\":\"" + student + "\",\"value2\":\"" + suhu + "\",\"value3\":\"" + remark + "\"}";  
+  temperature = String(temp);
+  String jsonObject = "{\"value1\":\"" + student + "\",\"value2\":\"" + temperature + "\",\"value3\":\"" + remark + "\"}";  
                      
   client.println(String("POST ") + resourceA + " HTTP/1.1");
   client.println(String("Host: ") + serverA); 
@@ -332,7 +285,8 @@ void makeIFTTTRequestB() {
   Serial.print("Request resource: "); 
   Serial.println(resourceB);
 
-  String jsonObject = String("{\"value1\":\"" + student + "\",\"value2\":\"" + suhu + "\",\"value3\":\"" + remark + "\"}");  
+  temperature = String(temp);
+  String jsonObject = String("{\"value1\":\"" + student + "\",\"value2\":\"" + temp + "\",\"value3\":\"" + remark + "\"}");  
                      
   client.println(String("POST ") + resourceB + " HTTP/1.1");
   client.println(String("Host: ") + serverB); 
@@ -374,7 +328,7 @@ void makeIFTTTRequestC() {
   Serial.print("Request resource: "); 
   Serial.println(resourceC);
 
-  String jsonObject = String("{\"value1\":\"") + student + "\",\"value2\":\"" + NoPhone + "\",\"value3\":\"" + remark + "\"}";  
+  String jsonObject = String("{\"value1\":\"") + student + "\",\"value2\":\"" + NoPhone + "\",\"value3\":\"" + notify + "\"}";  
                      
   client.println(String("POST ") + resourceC + " HTTP/1.1");
   client.println(String("Host: ") + serverC); 
@@ -396,4 +350,62 @@ void makeIFTTTRequestC() {
   }  
   Serial.println("\nclosing connection");
   client.stop(); 
+}
+
+
+void readtemp(){
+  Serial.print("Ambient = "); Serial.print(mlx.readAmbientTempC());
+  Serial.print("*C\tObject = "); Serial.print(mlx.readObjectTempC()); Serial.println("*C");
+  Serial.println();
+  //delay(1000);
+
+  temp++;  // Increase value for testing
+  if(temp > 43)  // If temp is greater than 150
+  {
+    temp = 0;  // Set temp to 0
+  }
+  
+  temp = mlx.readObjectTempC(); //comment this line if you want to test
+  
+  display.clearDisplay();  // Clear the display so we can refresh
+
+  // Print text:
+  display.setFont();
+  display.setCursor(45,5);  // (x,y)
+  display.println("TEMPERATURE");  // Text or value to print
+
+  // Print temperature
+  char string[10];  // Create a character array of 10 characters
+  // Convert float to a string:
+  dtostrf(temp, 4, 0, string);  // (variable, no. of digits we are going to use, no. of decimal digits, string name)
+  
+  display.setFont(&FreeMonoBold9pt7b);  // Set a custom font
+  display.setCursor(22,25);  // (x,y)
+  display.println(string);  // Text or value to print
+  display.setCursor(90,25);  // (x,y)
+  display.println("C");  // Text or value to print
+  display.setFont(); 
+  display.setCursor(78,15);  // (x,y)
+  display.cp437(true);
+  display.write(167);
+  
+  // Draw a filled circle:
+    display.fillCircle(18, 27, 5, WHITE); // Draw filled circle (x,y,radius,color). X and Y are the coordinates for the center point
+    
+  // Draw rounded rectangle:
+   display.drawRoundRect(16, 3, 5, 24, 2, WHITE); // Draw rounded rectangle (x,y,width,height,radius,color)
+   
+   // It draws from the location to down-right
+    // Draw ruler step
+
+   for (int i = 3; i<=18; i=i+2){
+    display.drawLine(21, i, 22, i, WHITE);  // Draw line (x0,y0,x1,y1,color)
+  }
+  
+//  //Draw temperature
+//  temp = temp*0.43; //ratio for show
+  display.drawLine(18, 23, 18, 23-temp, WHITE);  // Draw line (x0,y0,x1,y1,color)
+  
+  display.display(); 
+  delay(500);
 }
